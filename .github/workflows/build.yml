@@ -1,108 +1,141 @@
-name: Build Real Standalone App
+name: Build Shinn IPA
 
 on:
+  workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - master
 
 jobs:
-    build:
-      runs-on: macos-latest
+  build:
+    name: Build Unsigned IPA
+    runs-on: macos-14
 
-      steps:
-      - name: Checkout Code
+    steps:
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Create and Compile Native Binary
+      - name: Show source
+        shell: bash
         run: |
-          echo "[+] Đang tạo mã nguồn tối giản chuẩn iOS..."
-          
-          # Tạo trực tiếp tệp main.m chuẩn UIKit ngay trong môi trường build để tránh lỗi thiếu file
-          cat << 'EOF' > main.m
-          #import <UIKit/UIKit.h>
+          set -e
 
-          @interface AppDelegate : UIResponder <UIApplicationDelegate>
-          @property (strong, nonatomic) UIWindow *window;
-          @end
+          echo "===== SOURCE ====="
+          find . -maxdepth 3 -type f | sort
 
-          @implementation AppDelegate
-          - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-              self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-              self.window.backgroundColor = [UIColor blackColor];
-              
-              UIViewController *vc = [[UIViewController alloc] init];
-              UILabel *label = [[UILabel alloc] initWithFrame:vc.view.bounds];
-              label.text = @"ShinnThieuu Core v2.0";
-              label.textColor = [UIColor cyanColor];
-              label.textAlignment = NSTextAlignmentCenter;
-              label.font = [UIFont boldSystemFontOfSize:20];
-              [vc.view addSubview:label];
-              
-              self.window.rootViewController = vc;
-              [self.window makeKeyAndVisible];
-              return YES;
-          }
-          @end
-
-          int main(int argc, char * argv[]) {
-              @autoreleasepool {
-                  return UIApplicationMain(argc, argv, nil, NSStringFromClass([AppDelegate class]));
-              }
-          }
-          EOF
-
-          echo "[+] Bắt đầu biên dịch tệp nhị phân arm64..."
-          clang -target arm64-apple-ios14.0 -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
-          -framework Foundation -framework UIKit -framework CoreGraphics \
-          main.m -o ShinnThieuuApp
-
-          echo "[+] Biên dịch thành công!"
-
-      - name: Package IPA Structure
+      - name: Check Xcode
         run: |
-          mkdir -p ShinnThieuu_Output/Payload/ShinnThieuuApp.app
-          
-          # Đưa binary thật và Info.plist vào gói app
-          mv ShinnThieuuApp ShinnThieuu_Output/Payload/ShinnThieuuApp.app/
-          
-          if [ -f Info.plist ]; then
-            cp Info.plist ShinnThieuu_Output/Payload/ShinnThieuuApp.app/
-          else
-            # Tạo Info.plist mặc định nếu chưa có
-            cat << 'EOF' > ShinnThieuu_Output/Payload/ShinnThieuuApp.app/Info.plist
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-                <key>CFBundleIdentifier</key>
-                <string>com.shinnthieuu.app</string>
-                <key>CFBundleName</key>
-                <string>ShinnThieuuApp</string>
-                <key>CFBundleExecutable</key>
-                <string>ShinnThieuuApp</string>
-                <key>CFBundlePackageType</key>
-                <string>APPL</string>
-                <key>CFBundleShortVersionString</key>
-                <string>1.0</string>
-                <key>LSRequiresIPhoneOS</key>
-                <true/>
-                <key>MinimumOSVersion</key>
-                <string>14.0</string>
-            </dict>
-            </plist>
-            EOF
-          fi
+          set -e
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
 
-      - name: Create IPA Archive
+      - name: Prepare source
+        shell: bash
         run: |
-          cd ShinnThieuu_Output
-          zip -r -y ../ShinnThieuu_Standalone.ipa Payload/
-          cd ..
-          
-          mkdir IPA_Release
-          mv ShinnThieuu_Standalone.ipa IPA_Release/
+          set -euo pipefail
 
-      - name: Upload Artifact
+          # Xóa các ký tự Unicode ẩn từng gây lỗi tên file
+          find . -depth -name '*#U2060*' -print
+
+          while IFS= read -r file; do
+            new="${file//\#U2060/}"
+            if [ "$file" != "$new" ]; then
+              mv "$file" "$new"
+            fi
+          done < <(find . -depth -name '*#U2060*' -print)
+
+          echo "===== AFTER CLEAN ====="
+          find . -maxdepth 3 -type f | sort
+
+      - name: Find source files
+        shell: bash
+        run: |
+          set -e
+
+          test -f "main.m"
+          test -f "AppDelegate.mm"
+          test -f "Info.plist"
+
+          echo "main.m              OK"
+          echo "AppDelegate.mm      OK"
+          echo "Info.plist          OK"
+
+      - name: Build application
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
+          CLANG="$(xcrun --sdk iphoneos -f clang++)"
+
+          APP_NAME="ShinnThieuuApp"
+          BUILD_DIR="$PWD/build"
+          APP_DIR="$BUILD_DIR/$APP_NAME.app"
+
+          rm -rf "$BUILD_DIR"
+          mkdir -p "$APP_DIR"
+
+          echo "SDK: $SDK_PATH"
+          echo "Compiler: $CLANG"
+
+          "$CLANG" \
+            -isysroot "$SDK_PATH" \
+            -arch arm64 \
+            -miphoneos-version-min=17.0 \
+            -fobjc-arc \
+            -framework UIKit \
+            -framework Foundation \
+            main.m \
+            AppDelegate.mm \
+            builder.mm \
+            -o "$APP_DIR/$APP_NAME"
+
+          cp Info.plist "$APP_DIR/Info.plist"
+
+          echo "===== APP CONTENT ====="
+          find "$APP_DIR" -maxdepth 2 -type f -print
+
+      - name: Verify application
+        shell: bash
+        run: |
+          set -e
+
+          APP="build/ShinnThieuuApp.app"
+
+          test -f "$APP/ShinnThieuuApp"
+          test -f "$APP/Info.plist"
+
+          file "$APP/ShinnThieuuApp"
+
+          echo "Application created successfully."
+
+      - name: Create IPA
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf Payload
+          mkdir -p Payload
+
+          cp -R "build/ShinnThieuuApp.app" "Payload/"
+
+          rm -f ShinnThieuuApp_Unsigned.ipa
+
+          /usr/bin/zip \
+            -qry \
+            "ShinnThieuuApp_Unsigned.ipa" \
+            Payload
+
+          echo "===== IPA ====="
+          ls -lh ShinnThieuuApp_Unsigned.ipa
+
+          echo "===== IPA CONTENT ====="
+          unzip -l ShinnThieuuApp_Unsigned.ipa
+
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ShinnThieuu_Standalone_IPA
-          path: IPA_Release/ShinnThieuu_Standalone.ipa
+          name: ShinnThieuu-IPA
+          path: ShinnThieuuApp_Unsigned.ipa
+          if-no-files-found: error
