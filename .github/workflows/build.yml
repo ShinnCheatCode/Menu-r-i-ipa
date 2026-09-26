@@ -9,129 +9,215 @@ on:
 
 jobs:
   build:
-    name: Build IPA
+    name: Build IPA from ZIP
     runs-on: macos-14
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find source directory
+      - name: Find ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "===== REPOSITORY ====="
-          pwd
-          find . -maxdepth 4 -type f | sort
+          echo "===== FILES IN REPOSITORY ====="
+          find . -maxdepth 4 -type f -print
 
-          MAIN_FILE="$(find "$GITHUB_WORKSPACE" \
+          ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
             -type f \
-            -name "main.m" \
-            -not -path "*/.git/*" \
+            \( -iname '*.zip' \) \
+            -not -path '*/.git/*' \
+            | head -n 1)"
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "::error::Không tìm thấy file ZIP"
+            exit 1
+          fi
+
+          echo "ZIP: $ZIP_FILE"
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+
+      - name: Extract ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXTRACT="$GITHUB_WORKSPACE/extracted"
+
+          rm -rf "$EXTRACT"
+          mkdir -p "$EXTRACT"
+
+          echo "===== EXTRACT ZIP ====="
+
+          /usr/bin/unzip -q "$ZIP_FILE" -d "$EXTRACT"
+
+          echo "===== EXTRACTED FILES ====="
+          find "$EXTRACT" -type f -print
+
+      - name: Clean hidden Unicode characters
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          import os
+
+          root = os.environ["GITHUB_WORKSPACE"] + "/extracted"
+
+          bad_chars = [
+              "\u200b",
+              "\u200c",
+              "\u200d",
+              "\u2060",
+              "\ufeff",
+          ]
+
+          for current_root, dirs, files in os.walk(root, topdown=False):
+              for name in files + dirs:
+                  new_name = name
+
+                  for char in bad_chars:
+                      new_name = new_name.replace(char, "")
+
+                  if new_name != name:
+                      old_path = os.path.join(current_root, name)
+                      new_path = os.path.join(current_root, new_name)
+
+                      if not os.path.exists(new_path):
+                          os.rename(old_path, new_path)
+                          print(f"Renamed: {repr(name)} -> {repr(new_name)}")
+          PY
+
+      - name: Locate source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="$GITHUB_WORKSPACE/extracted"
+
+          echo "===== SEARCH SOURCE ====="
+
+          MAIN_FILE="$(find "$ROOT" \
+            -type f \
+            -name 'main.m' \
+            -not -path '*/.git/*' \
             | head -n 1)"
 
           if [ -z "$MAIN_FILE" ]; then
-            echo "::error::Không tìm thấy main.m"
+            echo "::error::Không tìm thấy main.m sau khi giải nén ZIP"
+            find "$ROOT" -type f -print
             exit 1
           fi
 
           SOURCE_DIR="$(dirname "$MAIN_FILE")"
 
-          echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
+          echo "main.m       = $MAIN_FILE"
+          echo "SOURCE_DIR   = $SOURCE_DIR"
 
-          echo "================================"
-          echo "Source directory:"
-          echo "$SOURCE_DIR"
-          echo "================================"
-
-      - name: Check source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Checking:"
-          echo "$SOURCE_DIR"
-
-          test -f "$SOURCE_DIR/main.m"
-          test -f "$SOURCE_DIR/AppDelegate.mm"
-          test -f "$SOURCE_DIR/Info.plist"
-
-          echo "main.m         OK"
-          echo "AppDelegate.mm OK"
-          echo "Info.plist     OK"
-
-          if [ -f "$SOURCE_DIR/builder.mm" ]; then
-            echo "builder.mm     OK"
+          if [ ! -f "$SOURCE_DIR/AppDelegate.mm" ]; then
+            echo "::error::Không tìm thấy AppDelegate.mm"
+            exit 1
           fi
 
+          if [ ! -f "$SOURCE_DIR/Info.plist" ]; then
+            echo "::error::Không tìm thấy Info.plist"
+            exit 1
+          fi
+
+          echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
+
       - name: Check Xcode
+        shell: bash
         run: |
           set -euo pipefail
 
           xcodebuild -version
 
-          SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
+          echo "===== iOS SDK ====="
+          xcrun --sdk iphoneos --show-sdk-path
 
-          echo "iPhoneOS SDK:"
-          echo "$SDK_PATH"
-
-      - name: Build application
+      - name: Build app
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$SOURCE_DIR"
 
-          SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
-          CLANG="$(xcrun --sdk iphoneos -f clang++)"
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          CC="$(xcrun --sdk iphoneos -f clang)"
+          CXX="$(xcrun --sdk iphoneos -f clang++)"
 
           APP_NAME="ShinnThieuuApp"
-
           BUILD_DIR="$GITHUB_WORKSPACE/build"
-          APP_DIR="$BUILD_DIR/$APP_NAME.app"
+          APP="$BUILD_DIR/$APP_NAME.app"
 
           rm -rf "$BUILD_DIR"
-          mkdir -p "$APP_DIR"
+          mkdir -p "$APP"
 
-          echo "================================"
-          echo "Building $APP_NAME"
-          echo "================================"
+          echo "===== SOURCE ====="
+          find "$SOURCE_DIR" -maxdepth 2 -type f -print
 
-          SOURCES=()
+          echo "===== COMPILE main.m ====="
 
-          if [ -f "main.m" ]; then
-            SOURCES+=("main.m")
-          fi
-
-          if [ -f "AppDelegate.mm" ]; then
-            SOURCES+=("AppDelegate.mm")
-          fi
-
-          if [ -f "builder.mm" ]; then
-            SOURCES+=("builder.mm")
-          fi
-
-          echo "Source files:"
-          printf '%s\n' "${SOURCES[@]}"
-
-          "$CLANG" \
-            -isysroot "$SDK_PATH" \
+          "$CC" \
+            -isysroot "$SDK" \
             -arch arm64 \
             -miphoneos-version-min=17.0 \
             -fobjc-arc \
-            "${SOURCES[@]}" \
+            -I"$SOURCE_DIR" \
+            -c "$SOURCE_DIR/main.m" \
+            -o "$BUILD_DIR/main.o"
+
+          echo "===== COMPILE AppDelegate.mm ====="
+
+          "$CXX" \
+            -isysroot "$SDK" \
+            -arch arm64 \
+            -miphoneos-version-min=17.0 \
+            -fobjc-arc \
+            -I"$SOURCE_DIR" \
+            -c "$SOURCE_DIR/AppDelegate.mm" \
+            -o "$BUILD_DIR/AppDelegate.o"
+
+          OBJECTS=(
+            "$BUILD_DIR/main.o"
+            "$BUILD_DIR/AppDelegate.o"
+          )
+
+          if [ -f "$SOURCE_DIR/builder.mm" ]; then
+
+            echo "===== COMPILE builder.mm ====="
+
+            "$CXX" \
+              -isysroot "$SDK" \
+              -arch arm64 \
+              -miphoneos-version-min=17.0 \
+              -fobjc-arc \
+              -I"$SOURCE_DIR" \
+              -c "$SOURCE_DIR/builder.mm" \
+              -o "$BUILD_DIR/builder.o"
+
+            OBJECTS+=("$BUILD_DIR/builder.o")
+          fi
+
+          echo "===== LINK ====="
+
+          "$CXX" \
+            -isysroot "$SDK" \
+            -arch arm64 \
+            -miphoneos-version-min=17.0 \
+            "${OBJECTS[@]}" \
             -framework UIKit \
             -framework Foundation \
-            -o "$APP_DIR/$APP_NAME"
+            -o "$APP/$APP_NAME"
 
-          cp "Info.plist" "$APP_DIR/Info.plist"
+          echo "===== COPY INFO.PLIST ====="
 
-          echo "================================"
-          echo "APP CREATED"
-          echo "================================"
+          cp "$SOURCE_DIR/Info.plist" "$APP/Info.plist"
 
-          find "$APP_DIR" -maxdepth 2 -type f -print
+          echo "===== APP CONTENT ====="
+          find "$APP" -maxdepth 2 -type f -print
 
       - name: Verify app
         shell: bash
@@ -144,27 +230,12 @@ jobs:
           test -f "$APP/ShinnThieuuApp"
           test -f "$APP/Info.plist"
 
-          echo "Executable:"
-          file "$APP/ShinnThieuuApp"
-
-          echo "Info.plist:"
           plutil -lint "$APP/Info.plist"
 
-      - name: Create Payload
-        shell: bash
-        run: |
-          set -euo pipefail
+          echo "===== APP INFO ====="
+          file "$APP/ShinnThieuuApp"
 
-          rm -rf "$GITHUB_WORKSPACE/Payload"
-
-          mkdir -p "$GITHUB_WORKSPACE/Payload"
-
-          cp -R \
-            "$GITHUB_WORKSPACE/build/ShinnThieuuApp.app" \
-            "$GITHUB_WORKSPACE/Payload/"
-
-          echo "Payload:"
-          find "$GITHUB_WORKSPACE/Payload" -maxdepth 3 -type f -print
+          echo "APP BUILD OK"
 
       - name: Create IPA
         shell: bash
@@ -173,20 +244,24 @@ jobs:
 
           cd "$GITHUB_WORKSPACE"
 
-          rm -f ShinnThieuuApp_Unsigned.ipa
+          rm -rf Payload
+          mkdir -p Payload
 
-          /usr/bin/zip \
-            -qry \
-            ShinnThieuuApp_Unsigned.ipa \
+          cp -R \
+            "build/ShinnThieuuApp.app" \
+            "Payload/ShinnThieuuApp.app"
+
+          rm -f "ShinnThieuuApp_Unsigned.ipa"
+
+          /usr/bin/zip -qry \
+            "ShinnThieuuApp_Unsigned.ipa" \
             Payload
 
-          echo "================================"
-          echo "IPA CREATED"
-          echo "================================"
+          echo "===== IPA CREATED ====="
 
-          ls -lh ShinnThieuuApp_Unsigned.ipa
+          ls -lh "ShinnThieuuApp_Unsigned.ipa"
 
-          unzip -t ShinnThieuuApp_Unsigned.ipa
+          unzip -t "ShinnThieuuApp_Unsigned.ipa"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
