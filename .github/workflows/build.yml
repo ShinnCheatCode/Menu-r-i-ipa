@@ -1,48 +1,108 @@
-name: Build Standalone ShinnThieuu App
+name: Build Real Standalone App
 
 on:
   push:
     branches: [ main ]
 
 jobs:
-  build:
-    runs-on: macos-latest
+    build:
+      runs-on: macos-latest
 
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    - name: Setup App Binary and Structure
-      run: |
-        echo "[+] Khởi tạo cấu trúc gói ứng dụng độc lập chuẩn iOS..."
-        
-        # Tạo thư mục Payload/.app
-        mkdir -p ShinnThieuu_Output/Payload/ShinnThieuuApp.app
-        
-        # Nếu có tệp Info.plist thì đưa vào, nếu không tự tạo file cơ bản
-        if [ -f Info.plist ]; then
-          cp Info.plist ShinnThieuu_Output/Payload/ShinnThieuuApp.app/
-        else
-          echo "Không tìm thấy Info.plist, đang tạo mặc định..."
-        fi
-        
-        # Tạo tệp thực thi nhị phân hợp lệ để vượt qua bước kiểm tra của công cụ ký IPA
-        echo '#!/bin/sh' > ShinnThieuu_Output/Payload/ShinnThieuuApp.app/ShinnThieuuApp
-        chmod +x ShinnThieuu_Output/Payload/ShinnThieuuApp.app/ShinnThieuuApp
-        
-        echo "[+] Đã thiết lập hoàn tất cấu trúc ứng dụng độc lập!"
+      - name: Create and Compile Native Binary
+        run: |
+          echo "[+] Đang tạo mã nguồn tối giản chuẩn iOS..."
+          
+          # Tạo trực tiếp tệp main.m chuẩn UIKit ngay trong môi trường build để tránh lỗi thiếu file
+          cat << 'EOF' > main.m
+          #import <UIKit/UIKit.h>
 
-    - name: Create IPA Archive
-      run: |
-        cd ShinnThieuu_Output
-        zip -r -y ../ShinnThieuu_Standalone.ipa Payload/
-        cd ..
-        
-        mkdir IPA_Release
-        mv ShinnThieuu_Standalone.ipa IPA_Release/
+          @interface AppDelegate : UIResponder <UIApplicationDelegate>
+          @property (strong, nonatomic) UIWindow *window;
+          @end
 
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: ShinnThieuu_Standalone_IPA
-        path: IPA_Release/ShinnThieuu_Standalone.ipa
+          @implementation AppDelegate
+          - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+              self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+              self.window.backgroundColor = [UIColor blackColor];
+              
+              UIViewController *vc = [[UIViewController alloc] init];
+              UILabel *label = [[UILabel alloc] initWithFrame:vc.view.bounds];
+              label.text = @"ShinnThieuu Core v2.0";
+              label.textColor = [UIColor cyanColor];
+              label.textAlignment = NSTextAlignmentCenter;
+              label.font = [UIFont boldSystemFontOfSize:20];
+              [vc.view addSubview:label];
+              
+              self.window.rootViewController = vc;
+              [self.window makeKeyAndVisible];
+              return YES;
+          }
+          @end
+
+          int main(int argc, char * argv[]) {
+              @autoreleasepool {
+                  return UIApplicationMain(argc, argv, nil, NSStringFromClass([AppDelegate class]));
+              }
+          }
+          EOF
+
+          echo "[+] Bắt đầu biên dịch tệp nhị phân arm64..."
+          clang -target arm64-apple-ios14.0 -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
+          -framework Foundation -framework UIKit -framework CoreGraphics \
+          main.m -o ShinnThieuuApp
+
+          echo "[+] Biên dịch thành công!"
+
+      - name: Package IPA Structure
+        run: |
+          mkdir -p ShinnThieuu_Output/Payload/ShinnThieuuApp.app
+          
+          # Đưa binary thật và Info.plist vào gói app
+          mv ShinnThieuuApp ShinnThieuu_Output/Payload/ShinnThieuuApp.app/
+          
+          if [ -f Info.plist ]; then
+            cp Info.plist ShinnThieuu_Output/Payload/ShinnThieuuApp.app/
+          else
+            # Tạo Info.plist mặc định nếu chưa có
+            cat << 'EOF' > ShinnThieuu_Output/Payload/ShinnThieuuApp.app/Info.plist
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+                <key>CFBundleIdentifier</key>
+                <string>com.shinnthieuu.app</string>
+                <key>CFBundleName</key>
+                <string>ShinnThieuuApp</string>
+                <key>CFBundleExecutable</key>
+                <string>ShinnThieuuApp</string>
+                <key>CFBundlePackageType</key>
+                <string>APPL</string>
+                <key>CFBundleShortVersionString</key>
+                <string>1.0</string>
+                <key>LSRequiresIPhoneOS</key>
+                <true/>
+                <key>MinimumOSVersion</key>
+                <string>14.0</string>
+            </dict>
+            </plist>
+            EOF
+          fi
+
+      - name: Create IPA Archive
+        run: |
+          cd ShinnThieuu_Output
+          zip -r -y ../ShinnThieuu_Standalone.ipa Payload/
+          cd ..
+          
+          mkdir IPA_Release
+          mv ShinnThieuu_Standalone.ipa IPA_Release/
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShinnThieuu_Standalone_IPA
+          path: IPA_Release/ShinnThieuu_Standalone.ipa
