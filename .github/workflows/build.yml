@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build IPA from ZIP
+    name: Build Unsigned IPA
     runs-on: macos-14
 
     steps:
@@ -21,12 +21,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "===== FILES IN REPOSITORY ====="
-          find . -maxdepth 4 -type f -print
-
           ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
             -type f \
-            \( -iname '*.zip' \) \
+            -iname '*.zip' \
             -not -path '*/.git/*' \
             | head -n 1)"
 
@@ -35,27 +32,21 @@ jobs:
             exit 1
           fi
 
-          echo "ZIP: $ZIP_FILE"
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+          echo "ZIP: $ZIP_FILE"
 
       - name: Extract ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          EXTRACT="$GITHUB_WORKSPACE/extracted"
+          rm -rf "$GITHUB_WORKSPACE/extracted"
+          mkdir -p "$GITHUB_WORKSPACE/extracted"
 
-          rm -rf "$EXTRACT"
-          mkdir -p "$EXTRACT"
+          unzip -q "$ZIP_FILE" \
+            -d "$GITHUB_WORKSPACE/extracted"
 
-          echo "===== EXTRACT ZIP ====="
-
-          /usr/bin/unzip -q "$ZIP_FILE" -d "$EXTRACT"
-
-          echo "===== EXTRACTED FILES ====="
-          find "$EXTRACT" -type f -print
-
-      - name: Clean hidden Unicode characters
+      - name: Clean hidden characters
         shell: bash
         run: |
           set -euo pipefail
@@ -65,28 +56,27 @@ jobs:
 
           root = os.environ["GITHUB_WORKSPACE"] + "/extracted"
 
-          bad_chars = [
-              "\u200b",
-              "\u200c",
-              "\u200d",
-              "\u2060",
-              "\ufeff",
-          ]
+          bad_chars = "\u200b\u200c\u200d\u2060\ufeff"
 
-          for current_root, dirs, files in os.walk(root, topdown=False):
+          for current, dirs, files in os.walk(root, topdown=False):
               for name in files + dirs:
-                  new_name = name
+                  cleaned = "".join(
+                      c for c in name
+                      if c not in bad_chars
+                  )
 
-                  for char in bad_chars:
-                      new_name = new_name.replace(char, "")
+                  if cleaned != name:
+                      old = os.path.join(current, name)
+                      new = os.path.join(current, cleaned)
 
-                  if new_name != name:
-                      old_path = os.path.join(current_root, name)
-                      new_path = os.path.join(current_root, new_name)
-
-                      if not os.path.exists(new_path):
-                          os.rename(old_path, new_path)
-                          print(f"Renamed: {repr(name)} -> {repr(new_name)}")
+                      if not os.path.exists(new):
+                          os.rename(old, new)
+                          print(
+                              "Renamed:",
+                              repr(name),
+                              "->",
+                              repr(cleaned)
+                          )
           PY
 
       - name: Locate source
@@ -96,8 +86,6 @@ jobs:
 
           ROOT="$GITHUB_WORKSPACE/extracted"
 
-          echo "===== SEARCH SOURCE ====="
-
           MAIN_FILE="$(find "$ROOT" \
             -type f \
             -name 'main.m' \
@@ -105,27 +93,31 @@ jobs:
             | head -n 1)"
 
           if [ -z "$MAIN_FILE" ]; then
-            echo "::error::Không tìm thấy main.m sau khi giải nén ZIP"
+            echo "::error::Không tìm thấy main.m"
             find "$ROOT" -type f -print
             exit 1
           fi
 
           SOURCE_DIR="$(dirname "$MAIN_FILE")"
 
-          echo "main.m       = $MAIN_FILE"
-          echo "SOURCE_DIR   = $SOURCE_DIR"
-
-          if [ ! -f "$SOURCE_DIR/AppDelegate.mm" ]; then
-            echo "::error::Không tìm thấy AppDelegate.mm"
-            exit 1
-          fi
-
-          if [ ! -f "$SOURCE_DIR/Info.plist" ]; then
-            echo "::error::Không tìm thấy Info.plist"
-            exit 1
-          fi
+          for FILE in \
+            main.m \
+            AppDelegate.mm \
+            Info.plist
+          do
+            if [ ! -f "$SOURCE_DIR/$FILE" ]; then
+              echo "::error::Thiếu $FILE"
+              exit 1
+            fi
+          done
 
           echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
+
+          echo "===== SOURCE ====="
+          find "$SOURCE_DIR" \
+            -maxdepth 2 \
+            -type f \
+            -print
 
       - name: Check Xcode
         shell: bash
@@ -134,8 +126,11 @@ jobs:
 
           xcodebuild -version
 
-          echo "===== iOS SDK ====="
-          xcrun --sdk iphoneos --show-sdk-path
+          echo "===== SDK ====="
+
+          xcrun \
+            --sdk iphoneos \
+            --show-sdk-path
 
       - name: Build app
         shell: bash
@@ -144,61 +139,64 @@ jobs:
 
           cd "$SOURCE_DIR"
 
-          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          CC="$(xcrun --sdk iphoneos -f clang)"
-          CXX="$(xcrun --sdk iphoneos -f clang++)"
+          SDK="$(xcrun \
+            --sdk iphoneos \
+            --show-sdk-path)"
 
-          APP_NAME="ShinnThieuuApp"
-          BUILD_DIR="$GITHUB_WORKSPACE/build"
-          APP="$BUILD_DIR/$APP_NAME.app"
+          CC="$(xcrun \
+            --sdk iphoneos \
+            -f clang)"
 
-          rm -rf "$BUILD_DIR"
+          CXX="$(xcrun \
+            --sdk iphoneos \
+            -f clang++)"
+
+          BUILD="$GITHUB_WORKSPACE/build"
+          APP="$BUILD/ShinnThieuuApp.app"
+
+          rm -rf "$BUILD"
           mkdir -p "$APP"
 
-          echo "===== SOURCE ====="
-          find "$SOURCE_DIR" -maxdepth 2 -type f -print
-
-          echo "===== COMPILE main.m ====="
-
-          "$CC" \
-            -isysroot "$SDK" \
-            -arch arm64 \
-            -miphoneos-version-min=17.0 \
-            -fobjc-arc \
-            -I"$SOURCE_DIR" \
-            -c "$SOURCE_DIR/main.m" \
-            -o "$BUILD_DIR/main.o"
-
-          echo "===== COMPILE AppDelegate.mm ====="
-
-          "$CXX" \
-            -isysroot "$SDK" \
-            -arch arm64 \
-            -miphoneos-version-min=17.0 \
-            -fobjc-arc \
-            -I"$SOURCE_DIR" \
-            -c "$SOURCE_DIR/AppDelegate.mm" \
-            -o "$BUILD_DIR/AppDelegate.o"
-
-          OBJECTS=(
-            "$BUILD_DIR/main.o"
-            "$BUILD_DIR/AppDelegate.o"
+          CFLAGS=(
+            -isysroot "$SDK"
+            -arch arm64
+            -miphoneos-version-min=17.0
+            -fobjc-arc
+            -I"$SOURCE_DIR"
           )
 
-          if [ -f "$SOURCE_DIR/builder.mm" ]; then
+          echo "===== main.m ====="
 
-            echo "===== COMPILE builder.mm ====="
+          "$CC" \
+            "${CFLAGS[@]}" \
+            -c main.m \
+            -o "$BUILD/main.o"
+
+          echo "===== AppDelegate.mm ====="
+
+          "$CXX" \
+            "${CFLAGS[@]}" \
+            -c AppDelegate.mm \
+            -o "$BUILD/AppDelegate.o"
+
+          OBJECTS=(
+            "$BUILD/main.o"
+            "$BUILD/AppDelegate.o"
+          )
+
+          if [ -f builder.mm ]; then
+
+            echo "===== builder.mm ====="
 
             "$CXX" \
-              -isysroot "$SDK" \
-              -arch arm64 \
-              -miphoneos-version-min=17.0 \
-              -fobjc-arc \
-              -I"$SOURCE_DIR" \
-              -c "$SOURCE_DIR/builder.mm" \
-              -o "$BUILD_DIR/builder.o"
+              "${CFLAGS[@]}" \
+              -c builder.mm \
+              -o "$BUILD/builder.o"
 
-            OBJECTS+=("$BUILD_DIR/builder.o")
+            OBJECTS+=(
+              "$BUILD/builder.o"
+            )
+
           fi
 
           echo "===== LINK ====="
@@ -210,32 +208,40 @@ jobs:
             "${OBJECTS[@]}" \
             -framework UIKit \
             -framework Foundation \
-            -o "$APP/$APP_NAME"
+            -o "$APP/ShinnThieuuApp"
 
-          echo "===== COPY INFO.PLIST ====="
+          echo "===== INFO.PLIST ====="
 
-          cp "$SOURCE_DIR/Info.plist" "$APP/Info.plist"
+          cp \
+            "$SOURCE_DIR/Info.plist" \
+            "$APP/Info.plist"
 
-          echo "===== APP CONTENT ====="
-          find "$APP" -maxdepth 2 -type f -print
+          if [ -f "$SOURCE_DIR/localConfig.json" ]; then
+            cp \
+              "$SOURCE_DIR/localConfig.json" \
+              "$APP/localConfig.json"
+          fi
 
-      - name: Verify app
-        shell: bash
-        run: |
-          set -euo pipefail
+          if [ -f "$SOURCE_DIR/Assembly-CSharp-patch.bytes" ]; then
+            cp \
+              "$SOURCE_DIR/Assembly-CSharp-patch.bytes" \
+              "$APP/Assembly-CSharp-patch.bytes"
+          fi
 
-          APP="$GITHUB_WORKSPACE/build/ShinnThieuuApp.app"
+          echo "===== VERIFY APP ====="
 
-          test -d "$APP"
           test -f "$APP/ShinnThieuuApp"
           test -f "$APP/Info.plist"
 
-          plutil -lint "$APP/Info.plist"
+          plutil \
+            -lint \
+            "$APP/Info.plist"
 
-          echo "===== APP INFO ====="
           file "$APP/ShinnThieuuApp"
 
-          echo "APP BUILD OK"
+          lipo \
+            -info \
+            "$APP/ShinnThieuuApp"
 
       - name: Create IPA
         shell: bash
@@ -245,23 +251,28 @@ jobs:
           cd "$GITHUB_WORKSPACE"
 
           rm -rf Payload
+          rm -f ShinnThieuuApp_Unsigned.ipa
+
           mkdir -p Payload
 
           cp -R \
             "build/ShinnThieuuApp.app" \
             "Payload/ShinnThieuuApp.app"
 
-          rm -f "ShinnThieuuApp_Unsigned.ipa"
-
-          /usr/bin/zip -qry \
+          zip -qry \
             "ShinnThieuuApp_Unsigned.ipa" \
             Payload
 
-          echo "===== IPA CREATED ====="
+          echo "===== IPA ====="
 
-          ls -lh "ShinnThieuuApp_Unsigned.ipa"
+          ls -lh \
+            "ShinnThieuuApp_Unsigned.ipa"
 
-          unzip -t "ShinnThieuuApp_Unsigned.ipa"
+          unzip -tq \
+            "ShinnThieuuApp_Unsigned.ipa"
+
+          test -s \
+            "ShinnThieuuApp_Unsigned.ipa"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
