@@ -1,0 +1,19 @@
+{
+  "mod_name": "ShinnThieuu // Core v2.0",
+  "target_engine": "Unity",
+  "features": {
+    "esp_line": true,
+    "esp_box": true,
+    "esp_skeleton": true,
+    "health_bar": true,
+    "aimbot": false,
+    "speed_hack_x3": true,
+    "fast_parachute": true
+  },
+  "ui_settings": {
+    "floating_icon": "ST",
+    "toggle_gesture": "Tap",
+    "theme": "Dark Black"
+  },
+  "status": "active"
+}
