@@ -208,6 +208,7 @@ jobs:
             "${OBJECTS[@]}" \
             -framework UIKit \
             -framework Foundation \
+            -framework CoreGraphics \
             -o "$APP/ShinnThieuuApp"
 
           echo "===== INFO.PLIST ====="
