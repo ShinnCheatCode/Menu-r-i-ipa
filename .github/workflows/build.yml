@@ -1,0 +1,35 @@
+name: Build ShinnThieuu Package
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Prepare Package Structure
+      run: |
+        mkdir -p ShinnThieuu_Output/Payload/FreeFire.app/Data/Managed/
+        
+        # Đưa các tệp vào cấu trúc Unity
+        cp Assembly-CSharp-patch.bytes ShinnThieuu_Output/Payload/FreeFire.app/Data/Managed/
+        cp localConfig.json ShinnThieuu_Output/Payload/FreeFire.app/
+        
+        echo "[+] Đã nạp thành công cấu hình ShinnThieuu Core v2.0"
+
+    - name: Archive to IPA Artifact
+      run: |
+        cd ShinnThieuu_Output
+        zip -r ../ShinnThieuu_FreeFire_Mod.ipa Payload
+        cd ..
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ShinnThieuu_Release
+        path: ShinnThieuu_FreeFire_Mod.ipa
