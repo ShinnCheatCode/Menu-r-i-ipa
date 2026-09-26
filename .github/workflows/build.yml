@@ -10,26 +10,32 @@ jobs:
 
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Prepare Package Structure
       run: |
+        # 1. Tạo cấu trúc thư mục ứng dụng gốc
         mkdir -p ShinnThieuu_Output/Payload/FreeFire.app/Data/Managed/
         
-        # Đưa các tệp vào cấu trúc Unity
+        # 2. Đưa các tệp tài nguyên vào cấu trúc
         cp Assembly-CSharp-patch.bytes ShinnThieuu_Output/Payload/FreeFire.app/Data/Managed/
         cp localConfig.json ShinnThieuu_Output/Payload/FreeFire.app/
         
         echo "[+] Đã nạp thành công cấu hình ShinnThieuu Core v2.0"
 
-    - name: Archive to IPA Artifact
+    - name: Compile IPA
       run: |
+        # 3. Di chuyển vào thư mục Output và nén Payload thành tệp IPA hoàn chỉnh
         cd ShinnThieuu_Output
-        zip -r ../ShinnThieuu_FreeFire_Mod.ipa Payload
+        zip -r -y ../FreeFire_ShinnThieuu.ipa Payload/
         cd ..
+        
+        # Tạo một thư mục riêng chỉ để chứa tệp IPA thành phẩm giúp upload không bị rời rạc
+        mkdir IPA_Release
+        mv FreeFire_ShinnThieuu.ipa IPA_Release/
 
-    - name: Upload Artifact
+    - name: Upload Artifact IPA
       uses: actions/upload-artifact@v4
       with:
-        name: ShinnThieuu_Release
-        path: ShinnThieuu_FreeFire_Mod.ipa
+        name: ShinnThieuu_Release_IPA
+        path: IPA_Release/FreeFire_ShinnThieuu.ipa
