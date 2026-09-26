@@ -14,25 +14,24 @@ jobs:
 
     - name: Compile Standalone Binary
       run: |
-        echo "[+] Bắt đầu biên dịch ứng dụng độc lập..."
+        echo "[+] Đang biên dịch tệp main.m trực tiếp..."
         
-        # Biên dịch trực tiếp tệp main.m và AppDelegate.mm thành tệp thực thi nhị phân iOS arm64
+        # Chỉ định rõ ràng đường dẫn tuyệt đối hoặc biên dịch đúng tệp main.m đang có mặt
         clang++ -arch arm64 -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
         -framework Foundation -framework UIKit -framework CoreGraphics \
-        main.m -o ShinnThieuuApp
+        ./main.m -o ShinnThieuuApp
         
         echo "[+] Biên dịch nhị phân thành công!"
 
     - name: Package IPA Structure
       run: |
-        # Tạo cấu trúc thư mục ứng dụng chuẩn .app
         mkdir -p ShinnThieuu_Output/Payload/ShinnThieuuApp.app
         
-        # Di chuyển tệp thực thi và file cấu hình Info.plist vào trong gói app
+        # Đưa tệp thực thi và Info.plist vào gói app chuẩn
         mv ShinnThieuuApp ShinnThieuu_Output/Payload/ShinnThieuuApp.app/
         cp Info.plist ShinnThieuu_Output/Payload/ShinnThieuuApp.app/
         
-        echo "[+] Đã đóng gói xong cấu trúc ứng dụng!"
+        echo "[+] Đã đóng gói xong ứng dụng độc lập!"
 
     - name: Create IPA Archive
       run: |
