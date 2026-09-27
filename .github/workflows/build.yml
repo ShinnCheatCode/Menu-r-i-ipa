@@ -1,283 +1,44 @@
-name: Build Shinn IPA
+name: Build ShinnThieuu IPA
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
 
 jobs:
   build:
-    name: Build Unsigned IPA
     runs-on: macos-14
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Find ZIP
-        shell: bash
+      - name: Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode Project
+        run: xcodegen generate
+
+      - name: Build App
         run: |
-          set -euo pipefail
+          xcodebuild \
+            -project ShinnThieuuApp.xcodeproj \
+            -scheme ShinnThieuuApp \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO
 
-          ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
-            -type f \
-            -iname '*.zip' \
-            -not -path '*/.git/*' \
-            | head -n 1)"
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "::error::Không tìm thấy file ZIP"
-            exit 1
-          fi
-
-          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
-          echo "ZIP: $ZIP_FILE"
-
-      - name: Extract ZIP
-        shell: bash
+      - name: Package Payload
         run: |
-          set -euo pipefail
-
-          rm -rf "$GITHUB_WORKSPACE/extracted"
-          mkdir -p "$GITHUB_WORKSPACE/extracted"
-
-          unzip -q "$ZIP_FILE" \
-            -d "$GITHUB_WORKSPACE/extracted"
-
-      - name: Clean hidden characters
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          python3 <<'PY'
-          import os
-
-          root = os.environ["GITHUB_WORKSPACE"] + "/extracted"
-
-          bad_chars = "\u200b\u200c\u200d\u2060\ufeff"
-
-          for current, dirs, files in os.walk(root, topdown=False):
-              for name in files + dirs:
-                  cleaned = "".join(
-                      c for c in name
-                      if c not in bad_chars
-                  )
-
-                  if cleaned != name:
-                      old = os.path.join(current, name)
-                      new = os.path.join(current, cleaned)
-
-                      if not os.path.exists(new):
-                          os.rename(old, new)
-                          print(
-                              "Renamed:",
-                              repr(name),
-                              "->",
-                              repr(cleaned)
-                          )
-          PY
-
-      - name: Locate source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ROOT="$GITHUB_WORKSPACE/extracted"
-
-          MAIN_FILE="$(find "$ROOT" \
-            -type f \
-            -name 'main.m' \
-            -not -path '*/.git/*' \
-            | head -n 1)"
-
-          if [ -z "$MAIN_FILE" ]; then
-            echo "::error::Không tìm thấy main.m"
-            find "$ROOT" -type f -print
-            exit 1
-          fi
-
-          SOURCE_DIR="$(dirname "$MAIN_FILE")"
-
-          for FILE in \
-            main.m \
-            AppDelegate.mm \
-            Info.plist
-          do
-            if [ ! -f "$SOURCE_DIR/$FILE" ]; then
-              echo "::error::Thiếu $FILE"
-              exit 1
-            fi
-          done
-
-          echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
-
-          echo "===== SOURCE ====="
-          find "$SOURCE_DIR" \
-            -maxdepth 2 \
-            -type f \
-            -print
-
-      - name: Check Xcode
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          xcodebuild -version
-
-          echo "===== SDK ====="
-
-          xcrun \
-            --sdk iphoneos \
-            --show-sdk-path
-
-      - name: Build app
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$SOURCE_DIR"
-
-          SDK="$(xcrun \
-            --sdk iphoneos \
-            --show-sdk-path)"
-
-          CC="$(xcrun \
-            --sdk iphoneos \
-            -f clang)"
-
-          CXX="$(xcrun \
-            --sdk iphoneos \
-            -f clang++)"
-
-          BUILD="$GITHUB_WORKSPACE/build"
-          APP="$BUILD/ShinnThieuuApp.app"
-
-          rm -rf "$BUILD"
-          mkdir -p "$APP"
-
-          CFLAGS=(
-            -isysroot "$SDK"
-            -arch arm64
-            -miphoneos-version-min=17.0
-            -fobjc-arc
-            -I"$SOURCE_DIR"
-          )
-
-          echo "===== main.m ====="
-
-          "$CC" \
-            "${CFLAGS[@]}" \
-            -c main.m \
-            -o "$BUILD/main.o"
-
-          echo "===== AppDelegate.mm ====="
-
-          "$CXX" \
-            "${CFLAGS[@]}" \
-            -c AppDelegate.mm \
-            -o "$BUILD/AppDelegate.o"
-
-          OBJECTS=(
-            "$BUILD/main.o"
-            "$BUILD/AppDelegate.o"
-          )
-
-          if [ -f builder.mm ]; then
-
-            echo "===== builder.mm ====="
-
-            "$CXX" \
-              "${CFLAGS[@]}" \
-              -c builder.mm \
-              -o "$BUILD/builder.o"
-
-            OBJECTS+=(
-              "$BUILD/builder.o"
-            )
-
-          fi
-
-          echo "===== LINK ====="
-
-          "$CXX" \
-            -isysroot "$SDK" \
-            -arch arm64 \
-            -miphoneos-version-min=17.0 \
-            "${OBJECTS[@]}" \
-            -framework UIKit \
-            -framework Foundation \
-            -framework CoreGraphics \
-            -o "$APP/ShinnThieuuApp"
-
-          echo "===== INFO.PLIST ====="
-
-          cp \
-            "$SOURCE_DIR/Info.plist" \
-            "$APP/Info.plist"
-
-          if [ -f "$SOURCE_DIR/localConfig.json" ]; then
-            cp \
-              "$SOURCE_DIR/localConfig.json" \
-              "$APP/localConfig.json"
-          fi
-
-          if [ -f "$SOURCE_DIR/Assembly-CSharp-patch.bytes" ]; then
-            cp \
-              "$SOURCE_DIR/Assembly-CSharp-patch.bytes" \
-              "$APP/Assembly-CSharp-patch.bytes"
-          fi
-
-          echo "===== VERIFY APP ====="
-
-          test -f "$APP/ShinnThieuuApp"
-          test -f "$APP/Info.plist"
-
-          plutil \
-            -lint \
-            "$APP/Info.plist"
-
-          file "$APP/ShinnThieuuApp"
-
-          lipo \
-            -info \
-            "$APP/ShinnThieuuApp"
-
-      - name: Create IPA
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$GITHUB_WORKSPACE"
-
-          rm -rf Payload
-          rm -f ShinnThieuuApp_Unsigned.ipa
-
           mkdir -p Payload
-
-          cp -R \
-            "build/ShinnThieuuApp.app" \
-            "Payload/ShinnThieuuApp.app"
-
-          zip -qry \
-            "ShinnThieuuApp_Unsigned.ipa" \
-            Payload
-
-          echo "===== IPA ====="
-
-          ls -lh \
-            "ShinnThieuuApp_Unsigned.ipa"
-
-          unzip -tq \
-            "ShinnThieuuApp_Unsigned.ipa"
-
-          test -s \
-            "ShinnThieuuApp_Unsigned.ipa"
+          APP=$(find build -type d -name "*.app" | head -n 1)
+          cp -R "$APP" Payload/
+          zip -r ShinnThieuuApp.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ShinnThieuu-IPA
-          path: ShinnThieuuApp_Unsigned.ipa
-          if-no-files-found: error
+          name: ShinnThieuuApp-IPA
+          path: ShinnThieuuApp.ipa
